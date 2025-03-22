@@ -1,4 +1,12 @@
-# Usage
+# What is Shamon?
+
+This CLI tool uses Vibra for fingerprinting music that is playing on your computer and then send it to the Shazam API.
+
+## installation
+
+First follow [the instructions to install Vibra](https://github.com/BayernMuller/vibra) on your system.
+
+## Usage
 
 -   `./script.sh` # Normal mode with debug info
 -   `./script.sh --json` # JSON output mode
