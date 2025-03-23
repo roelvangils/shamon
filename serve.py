@@ -23,11 +23,14 @@ def get_music_table():
     <html>
     <head>
         <title>Music Data</title>
+        <link rel="preconnect" href="https://fonts.googleapis.com">
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link href="https://fonts.googleapis.com/css2?family=VT323&display=swap" rel="stylesheet">
         <style>
             body {
                 background-color: #0a0a0f;
                 color: #00ff66;
-                font-family: 'Courier New', monospace;
+                font-family: 'VT323', 'Courier New', monospace;
                 margin: 0;
                 padding: 20px;
             }
