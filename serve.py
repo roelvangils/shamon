@@ -24,22 +24,42 @@ def get_music_table():
     <head>
         <title>Music Data</title>
         <style>
+            body {
+                background-color: #0a0a0f;
+                color: #00ff66;
+                font-family: 'Courier New', monospace;
+                margin: 0;
+                padding: 20px;
+            }
+            h1 {
+                color: #ff00aa;
+                text-shadow: 0 0 5px #ff00aa, 0 0 10px #ff00aa;
+                text-transform: uppercase;
+                letter-spacing: 2px;
+            }
             table {
-                font: 12px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
                 border-collapse: collapse;
                 width: 100%;
+                background-color: rgba(10, 10, 15, 0.8);
+                border: 1px solid #00ccff;
+                box-shadow: 0 0 15px #00ccff;
             }
             th, td {
                 text-align: left;
-                padding: 8px;
-                border: 1px solid #ddd;
+                padding: 10px;
+                border: 1px solid #00ccff;
             }
             tr:nth-child(even) {
-                background-color: #f2f2f2;
+                background-color: rgba(0, 204, 255, 0.1);
+            }
+            tr:hover {
+                background-color: rgba(255, 0, 170, 0.2);
             }
             th {
-                background-color: #4CAF50;
-                color: white;
+                background-color: #000033;
+                color: #00ff66;
+                text-transform: uppercase;
+                border-bottom: 2px solid #ff00aa;
             }
         </style>
     </head>
