@@ -23,14 +23,11 @@ def get_music_table():
     <html>
     <head>
         <title>Music Data</title>
-        <link rel="preconnect" href="https://fonts.googleapis.com">
-        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-        <link href="https://fonts.googleapis.com/css2?family=VT323&display=swap" rel="stylesheet">
         <style>
             body {
                 background-color: #0a0a0f;
                 color: #00ff66;
-                font-family: 'VT323', 'Courier New', monospace;
+                font-family: 'Courier New', monospace;
                 margin: 0;
                 padding: 20px;
             }
@@ -97,4 +94,4 @@ def get_music_table():
     return Response(content=html, media_type="text/html")
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="127.0.0.1", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=1979)
