@@ -18,14 +18,19 @@
 ###########################################
 
 # Configuration
-DURATION=5                        # Length of each recording in seconds
-INTERVAL=15                       # Wait time between recordings in seconds
-RATE=22050                        # Audio sample rate
-BITS=16                           # Audio bit depth
-DB_FILE="$HOME/.music_monitor.db" # SQLite database location
-DEBUG=true                        # Enable debug output by default
+# export PATH="/bin:/sbin:/usr/bin:/usr/local/bin:/opt/homebrew/bin:$PATH"
+DURATION=5       # Length of each recording in seconds
+BASE_INTERVAL=10 # Startinterval in seconden
+MAX_INTERVAL=60  # Maximale wachttijd
+INTERVAL=$BASE_INTERVAL
+RATE=22050                          # Audio sample rate
+BITS=16                             # Audio bit depth
+DB_FILE="$HOME/.music_monitor.db"   # SQLite database location
+LOG_FILE="$HOME/.music_monitor.log" # Log file to write debug output
+THRESHOLD=0.01                      # Minimum RMS level to trigger recognition
+DEBUG=true                          # Enable debug output by default
+INPUT_DEVICE=""
 JSON_OUTPUT=false
-AUDIO_THRESHOLD=0.005 # Updated minimal RMS level for recognition
 
 # ANSI Color codes
 GREEN='\033[0;32m'
@@ -35,6 +40,9 @@ RED='\033[0;31m'
 YELLOW='\033[0;33m'
 NC='\033[0m' # No Color
 
+# Enable read for Enter detection
+stty -icanon -echo
+
 ###########################################
 # Helper Functions
 ###########################################
@@ -42,8 +50,7 @@ NC='\033[0m' # No Color
 # Debug logging function
 debug_log() {
     if $DEBUG; then
-        clear_line
-        echo -e "${YELLOW}DEBUG: $1${NC}"
+        printf "%s DEBUG: %s\n" "$(date '+%Y-%m-%d %H:%M:%S')" "$1" >>"$LOG_FILE"
     fi
 }
 
@@ -67,6 +74,7 @@ check_network() {
 # Cleanup function for graceful exit
 cleanup() {
     tput cnorm # Restore cursor
+    stty sane
     if ! $JSON_OUTPUT; then
         total_songs=$(sqlite3 "$DB_FILE" "SELECT COUNT(*) FROM songs")
         echo -e "\n${BLUE}Monitor stopped. Detected $total_songs songs${NC}"
@@ -91,20 +99,34 @@ while [[ "$#" -gt 0 ]]; do
     shift
 done
 
+# Prompt user to select audio input device
+echo -e "${BLUE}Available audio input devices:${NC}"
+input_list=$(sox -V3 -n -t coreaudio dummy trim 0 1 2>&1 | grep 'Found Audio Device' | sed -E 's/.*"(.+)"/\1/')
+if [ -z "$input_list" ]; then
+    echo -e "${RED}No input devices found.${NC}"
+    exit 1
+fi
+
+IFS=$'\n' read -rd '' -a inputs <<<"$input_list"
+
+for i in "${!inputs[@]}"; do
+    printf "%2d) %s\n" $((i + 1)) "${inputs[$i]}"
+done
+
+read -p "Enter the number of the input device to use: " device_number
+INPUT_DEVICE="${inputs[$((device_number - 1))]}"
+echo -e "${BLUE}Using input device: $INPUT_DEVICE${NC}"
+
 # Set up exit trap
 trap cleanup INT TERM
 
 # Check for required dependencies
-for cmd in sox vibra jq sqlite3; do
+for cmd in sox vibra jq sqlite3 bc; do
     if ! command -v $cmd &>/dev/null; then
         echo -e "${RED}Error: $cmd is not installed${NC}" >&2
         exit 1
     fi
 done
-
-# Check available audio devices
-debug_log "Checking available audio devices..."
-sox --help | grep -A 20 'AUDIO DEVICE DRIVERS'
 
 # Initialize SQLite database
 sqlite3 "$DB_FILE" "CREATE TABLE IF NOT EXISTS songs (
@@ -116,6 +138,17 @@ sqlite3 "$DB_FILE" "CREATE TABLE IF NOT EXISTS songs (
 
 # Hide cursor for clean output
 tput civis
+# Start with a fresh log file every run
+: >"$LOG_FILE"
+
+# Open the log file in the default viewer (non-blocking)
+if command -v open >/dev/null 2>&1; then
+    # macOS
+    open "$LOG_FILE" &
+elif command -v xdg-open >/dev/null 2>&1; then
+    # Linux
+    xdg-open "$LOG_FILE" >/dev/null 2>&1 &
+fi
 
 # Initial console output
 if ! $JSON_OUTPUT; then
@@ -131,26 +164,24 @@ fi
 last_song=""
 consecutive_empty=0
 max_retries=3
-first_run=true # Flag to skip initial wait
+first_run=false # Ensure we wait even before the first recognition
 
 while true; do
-    # Skip initial wait on first run, then wait between subsequent checks
+    # Wait between checks (can be skipped with Enter)
     if ! $first_run; then
         if ! $JSON_OUTPUT; then
-            accelerate=false
             for ((i = INTERVAL; i > 0; i--)); do
                 clear_line
-                printf "${GRAY}Next check in %2ds %s (press Enter to start immediately)${NC}" $i "$(printf '%.*s' $((i % 4)) '...')"
-                # Wait 1 second, break early if Enter is pressed
-                if read -t 1 -n 1 key; then
-                    accelerate=true
+                printf "${GRAY}Next check in %2ds (press Enter to skip) %s${NC}" "$i" "$(printf '%.*s' $((i % 4)) '...')"
+
+                # Check if Enter is pressed
+                read -t 1 -s -r input
+                if [[ $? -eq 0 ]]; then
+                    clear_line
+                    echo -e "${YELLOW}⏩ Skipping wait on user input...${NC}"
                     break
                 fi
             done
-            if $accelerate; then
-                clear_line
-                echo -e "${GRAY}Starting immediately...${NC}"
-            fi
         else
             sleep "$INTERVAL"
         fi
@@ -164,38 +195,27 @@ while true; do
     fi
 
     ###########################################
-    # Audio Level Detection and Recording
+    # Audio Level Detection
     ###########################################
 
-    debug_log "Recording audio sample..."
-    audio_file=$(mktemp)
-    audio_device="default" # Explicit Core Audio device on macOS
-    sox -t coreaudio "$audio_device" -t raw -b $BITS -e signed-integer -r $RATE -c 1 - trim 0 $DURATION >"$audio_file" 2>/dev/null
-    sox_exit_code=$?
+    debug_log "Recording audio level sample..."
+    TEMP_AUDIO="/tmp/audio_sample.wav"
+    sox -t coreaudio "$INPUT_DEVICE" -b $BITS -e signed-integer -r $RATE -c 1 "$TEMP_AUDIO" trim 0 0.5 2>/dev/null
 
-    if [ $sox_exit_code -ne 0 ]; then
-        debug_log "Error capturing audio: sox exited with code $sox_exit_code"
-        audio_level=0
-    else
-        file_size=$(stat -f%z "$audio_file")
-        debug_log "Captured audio file size: $file_size bytes"
-        # Use explicit raw parameters for proper RMS extraction.
-        audio_stats=$(sox -t raw -b $BITS -r $RATE -e signed-integer -c 1 "$audio_file" -n stat 2>&1)
-        audio_level=$(echo "$audio_stats" | tr -s ' ' | grep -i 'rms amplitude' | cut -d':' -f2 | sed 's/^ *//')
-        if [ -z "$audio_level" ]; then
-            audio_level=0
-            debug_log "No audio level detected, defaulting to 0"
-        else
-            debug_log "Audio level detected: $audio_level"
-        fi
+    # Analyse the recorded audio and extract the level before logging
+    audio_stat=$(sox -t wav "$TEMP_AUDIO" -n stat 2>&1)
+    audio_level=$(echo "$audio_stat" | awk '/RMS[[:space:]]+amplitude/ {print $3}')
+    audio_level=$(echo "$audio_level" | tr ',' '.')
+
+    if [ -z "$audio_level" ]; then
+        audio_level=0.0
+        debug_log "RMS amplitude not found, defaulting audio level to 0.0"
     fi
 
-    debug_log "Audio sample recorded from file: $audio_file"
-    debug_log "AUDIO_THRESHOLD set to: $AUDIO_THRESHOLD"
+    debug_log "Detected RMS audio level: $audio_level"
 
-    if (($(echo "$audio_level < $AUDIO_THRESHOLD" | bc -l))); then
-        debug_log "Audio level ($audio_level) below threshold, skipping recognition"
-        rm "$audio_file"
+    if (($(echo "$audio_level < 0.01" | bc -l))); then
+        debug_log "Too soft. There's either no music playing or the music is too soft."
         continue
     fi
 
@@ -204,8 +224,10 @@ while true; do
     ###########################################
 
     debug_log "Starting recognition..."
-    result=$(cat "$audio_file" | vibra --recognize --seconds $DURATION --rate $RATE --channels 1 --bits $BITS 2>/dev/null)
-    debug_log "Raw recognition result received"
+
+    # Record audio and perform recognition
+    result=$(sox -t coreaudio "$INPUT_DEVICE" -t raw -b $BITS -e signed-integer -r $RATE -c 1 - trim 0 $DURATION 2>/dev/null |
+        vibra --recognize --seconds $DURATION --rate $RATE --channels 1 --bits $BITS)
 
     # Validate JSON response
     if echo "$result" | jq -e . >/dev/null 2>&1; then
@@ -215,46 +237,59 @@ while true; do
         if echo "$result" | jq -e '.track' >/dev/null 2>&1; then
             debug_log "Track information found"
 
-            # Extract song information
-            song_info=$(echo "$result" | jq -r '.track | "\(.title) by \(.subtitle)"')
-            title=$(echo "$result" | jq -r '.track.title')
+            # Extract song information with trimmed title
+            raw_title=$(echo "$result" | jq -r '.track.title')
             artist=$(echo "$result" | jq -r '.track.subtitle')
+            title=$(echo "$raw_title" | sed 's/ *(.*//')
+            song_info="$title by $artist"
             timestamp=$(date '+%H:%M:%S')
 
             debug_log "Song detected: $song_info"
 
             # Only process if it's a different song from last detection
             if [[ "$last_song" != "$song_info" ]]; then
+                INTERVAL=$BASE_INTERVAL
+                last_song="$song_info"
+
                 if $JSON_OUTPUT; then
-                    # Output JSON format
                     echo "$result" | jq -c --raw-output \
                         "{timestamp: \"$timestamp\", title: .track.title, artist: .track.subtitle, audio_level: $audio_level}"
                 else
-                    # Output human-readable format
                     clear_line
                     echo -e "${GREEN}[$timestamp] $song_info${NC}"
                 fi
 
-                # Store in SQLite database
                 debug_log "Storing in database..."
-                # Escape single quotes in title and artist for SQL
                 title_escaped=$(echo "$title" | sed "s/'/''/g")
                 artist_escaped=$(echo "$artist" | sed "s/'/''/g")
                 sqlite3 "$DB_FILE" "INSERT INTO songs (timestamp, title, artist, audio_level)
                     VALUES (datetime('now', 'localtime'), '$title_escaped', '$artist_escaped', $audio_level);"
 
-                last_song="$song_info"
-                consecutive_empty=0
             else
-                debug_log "Same song as last detection, skipping"
+                INTERVAL=$((INTERVAL + 5))
+                if ((INTERVAL > 30)); then
+                    INTERVAL=30
+                fi
+                debug_log "Same song detected again. Increasing interval to $INTERVAL seconds."
             fi
+            consecutive_empty=0
+
         else
             debug_log "No track information in JSON"
             ((consecutive_empty++))
+            INTERVAL=$((BASE_INTERVAL * consecutive_empty))
+            if ((INTERVAL > MAX_INTERVAL)); then
+                INTERVAL=$MAX_INTERVAL
+            fi
         fi
     else
         debug_log "No valid response from recognition"
         ((consecutive_empty++))
+        INTERVAL=$((BASE_INTERVAL * consecutive_empty))
+        if ((INTERVAL > MAX_INTERVAL)); then
+            INTERVAL=$MAX_INTERVAL
+        fi
+        debug_log "No recognition. Setting next interval to $INTERVAL seconds"
     fi
 
     # Show "No music detected" after several empty results
@@ -263,7 +298,15 @@ while true; do
         echo -ne "${GRAY}No music detected${NC}"
         consecutive_empty=0
     fi
-
-    # Clean up temporary audio file
-    rm "$audio_file"
 done
+
+###########################################
+# Usage:
+# ./script.sh              # Normal mode with debug info
+# ./script.sh --json       # JSON output mode
+# ./script.sh --debug      # Debug mode
+#
+# Query history:
+# sqlite3 ~/.music_monitor.db "SELECT datetime(timestamp, 'localtime'),
+#     title, artist FROM songs ORDER BY timestamp DESC LIMIT 10;"
+###########################################
