@@ -152,6 +152,7 @@ fi
 
 # Initial console output
 if ! $JSON_OUTPUT; then
+    clear
     echo -e "${GREEN}📻 Music Monitor Started${NC} (Press Ctrl+C to stop)"
     echo "Recording ${DURATION}s samples every ${INTERVAL}s"
 fi
