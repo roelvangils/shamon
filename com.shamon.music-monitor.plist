@@ -1,46 +1,75 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+    Shamon LaunchAgent Configuration
+
+    IMPORTANT: Before using this file, update the following paths:
+    1. ProgramArguments: Replace /PATH/TO with your actual shamon installation directory
+    2. WorkingDirectory: Replace /PATH/TO with your actual shamon installation directory
+    3. StandardOutPath: Replace YOUR_USERNAME with your actual macOS username
+    4. StandardErrorPath: Replace YOUR_USERNAME with your actual macOS username
+
+    Installation:
+    1. Update all paths in this file
+    2. Copy to ~/Library/LaunchAgents/: cp com.shamon.music-monitor.plist ~/Library/LaunchAgents/
+    3. Load the service: launchctl load ~/Library/LaunchAgents/com.shamon.music-monitor.plist
+    4. View logs: tail -f ~/.music_monitor_launchd.log
+    5. Unload: launchctl unload ~/Library/LaunchAgents/com.shamon.music-monitor.plist
+-->
 <plist version="1.0">
 <dict>
     <key>Label</key>
     <string>com.shamon.music-monitor</string>
-    
+
+    <!-- REQUIRED: Update this path to your shamon installation directory -->
     <key>ProgramArguments</key>
     <array>
-        <string>/Users/roelvangils/repos/shamon/shamon.sh</string>
+        <string>/PATH/TO/shamon/shamon.sh</string>
         <string>--auto-input</string>
     </array>
-    
+
+    <!-- Environment variables for the process -->
     <key>EnvironmentVariables</key>
     <dict>
         <key>SHAMON_BACKGROUND</key>
         <string>true</string>
+        <!-- Add your PATH to include brew packages if needed -->
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin</string>
     </dict>
-    
+
+    <!-- REQUIRED: Update this path to your shamon installation directory -->
     <key>WorkingDirectory</key>
-    <string>/Users/roelvangils/repos/shamon</string>
-    
+    <string>/PATH/TO/shamon</string>
+
+    <!-- REQUIRED: Update YOUR_USERNAME to your actual username -->
     <key>StandardOutPath</key>
-    <string>/Users/roelvangils/.music_monitor_launchd.log</string>
-    
+    <string>/Users/YOUR_USERNAME/.music_monitor_launchd.log</string>
+
+    <!-- REQUIRED: Update YOUR_USERNAME to your actual username -->
     <key>StandardErrorPath</key>
-    <string>/Users/roelvangils/.music_monitor_launchd.log</string>
-    
+    <string>/Users/YOUR_USERNAME/.music_monitor_launchd.log</string>
+
+    <!-- Start the service when loaded -->
     <key>RunAtLoad</key>
     <true/>
-    
+
+    <!-- Restart if the service exits unexpectedly -->
     <key>KeepAlive</key>
     <dict>
         <key>SuccessfulExit</key>
         <false/>
     </dict>
-    
+
+    <!-- Run as an interactive process to maintain audio access -->
     <key>ProcessType</key>
     <string>Interactive</string>
-    
+
+    <!-- Enable legacy timers for better compatibility -->
     <key>LegacyTimers</key>
     <true/>
-    
+
+    <!-- Create a new session for the process -->
     <key>SessionCreate</key>
     <true/>
 </dict>

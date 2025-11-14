@@ -15,24 +15,37 @@
 # - JSON output option
 # - Audio level detection
 # - Colored console output
+# - Automatic device switching
 ###########################################
 
+VERSION="1.1.0"
+
+# Source common functions library
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/common.sh"
+
+###########################################
 # Configuration
-# export PATH="/bin:/sbin:/usr/bin:/usr/local/bin:/opt/homebrew/bin:$PATH"
-DURATION=5       # Length of each recording in seconds
-BASE_INTERVAL=10 # Startinterval in seconden
-MAX_INTERVAL=60  # Maximale wachttijd
+###########################################
+
+# Default configuration
+DURATION=5                           # Length of each recording in seconds
+BASE_INTERVAL=10                     # Start interval in seconds
+MAX_INTERVAL=60                      # Maximum wait time in seconds
 INTERVAL=$BASE_INTERVAL
-RATE=22050                          # Audio sample rate
-BITS=16                             # Audio bit depth
-DB_FILE="$HOME/.music_monitor.db"   # SQLite database location
-LOG_FILE="$HOME/.music_monitor.log" # Log file to write debug output
-THRESHOLD=0.01                      # Minimum RMS level to trigger recognition
-DEBUG=false                         # Enable debug output by default
-INPUT_DEVICE=""
-JSON_OUTPUT=false
-AUTO_INPUT=false # Auto-select input device
-HEADLESS=false   # Run in background
+INTERVAL_INCREMENT=5                 # Increment when same song detected
+SAME_SONG_MAX_INTERVAL=30            # Max interval for same song
+RATE=22050                           # Audio sample rate
+BITS=16                              # Audio bit depth
+DB_FILE="$HOME/.music_monitor.db"    # SQLite database location
+LOG_FILE="$HOME/.music_monitor.log"  # Log file for debug output
+AUDIO_THRESHOLD=0.01                 # Minimum RMS level to trigger recognition
+DEBUG=false                          # Enable debug output
+INPUT_DEVICE=""                      # Selected audio device
+JSON_OUTPUT=false                    # JSON output format
+AUTO_INPUT=false                     # Auto-select input device
+HEADLESS=false                       # Run in background
+TEMP_AUDIO="/tmp/shamon_audio_$$.wav" # Temporary audio file
 
 # Preferred audio input devices (in order of preference)
 PREFERRED_DEVICES=(
@@ -40,115 +53,86 @@ PREFERRED_DEVICES=(
     "MacBook Pro Microphone"
 )
 
-# ANSI Color codes
-GREEN='\033[0;32m'
-BLUE='\033[0;34m'
-GRAY='\033[0;90m'
-RED='\033[0;31m'
-YELLOW='\033[0;33m'
-NC='\033[0m' # No Color
+# Load user configuration if it exists
+CONFIG_FILE="$HOME/.shamonrc"
+if [ -f "$CONFIG_FILE" ]; then
+    source "$CONFIG_FILE"
+fi
+
+# Constants for device switching
+MAX_CONSECUTIVE_ZERO_AUDIO=3        # Switch device after this many zero readings
+MAX_RECOGNITION_RETRIES=3           # Show "no music" message after this many failures
 
 ###########################################
 # Helper Functions
 ###########################################
 
-# Debug logging function
-debug_log() {
-    if $DEBUG; then
-        printf "%s DEBUG: %s\n" "$(date '+%Y-%m-%d %H:%M:%S')" "$1" >>"$LOG_FILE"
-    fi
+# Show version information
+show_version() {
+    echo "Shamon v$VERSION"
+    echo "Audio monitoring and music recognition tool"
 }
 
-# Clear current line in terminal
-clear_line() {
-    echo -ne "\r\033[K"
-}
+# Show help information
+show_help() {
+    cat <<EOF
+Shamon v$VERSION - Music Recognition Monitor
 
-# Network connectivity check
-check_network() {
-    if ! ping -c 1 8.8.8.8 >/dev/null 2>&1; then
-        if ! $JSON_OUTPUT && ! $HEADLESS; then
-            clear_line
-            echo -ne "${RED}Network unavailable, waiting...${NC}"
-        fi
-        debug_log "Network unavailable"
-        return 1
-    fi
-    return 0
+Usage: $0 [OPTIONS]
+
+Options:
+    --json          Output in JSON format
+    --debug         Enable debug logging to $LOG_FILE
+    --auto-input    Auto-select input device from preferred list
+    --headless      Run in background without console output
+    --version       Show version information
+    --help          Show this help message
+
+Examples:
+    $0                              # Interactive mode
+    $0 --auto-input                 # Auto-select device
+    $0 --auto-input --headless      # Background mode
+    $0 --json                       # JSON output mode
+
+Configuration:
+    Create ~/.shamonrc to customize settings. Example:
+
+    PREFERRED_DEVICES=(
+        "My Webcam"
+        "Built-in Microphone"
+    )
+    AUDIO_THRESHOLD=0.005
+    BASE_INTERVAL=15
+
+Database:
+    Songs are stored in: $DB_FILE
+    Query example:
+    sqlite3 ~/.music_monitor.db "SELECT * FROM songs ORDER BY timestamp DESC LIMIT 10;"
+
+EOF
 }
 
 # Cleanup function for graceful exit
 cleanup() {
-    if ! $HEADLESS; then
-        tput cnorm # Restore cursor
-        stty sane
+    debug_log "Cleanup initiated"
+
+    # Clean up temporary files
+    rm -f "$TEMP_AUDIO"
+
+    # Restore terminal state
+    if ! $HEADLESS && [ -n "$ORIGINAL_STTY" ]; then
+        stty "$ORIGINAL_STTY" 2>/dev/null
+        tput cnorm 2>/dev/null
+        stty sane 2>/dev/null
     fi
+
     if ! $JSON_OUTPUT && ! $HEADLESS; then
-        total_songs=$(sqlite3 "$DB_FILE" "SELECT COUNT(*) FROM songs")
+        total_songs=$(sqlite3 "$DB_FILE" "SELECT COUNT(*) FROM songs" 2>/dev/null || echo "0")
         echo -e "\n${BLUE}Monitor stopped. Detected $total_songs songs${NC}"
     fi
+
     debug_log "Cleanup completed"
     exit 0
-}
-
-# Function to switch to next available audio device
-switch_audio_device() {
-    debug_log "Attempting to switch audio device due to zero audio levels"
-    
-    # Get current list of available devices
-    local new_input_list
-    if $HEADLESS; then
-        new_input_list=$(sox -V3 -n -t coreaudio dummy trim 0 1 2>&1 2>/dev/null | grep 'Found Audio Device' | sed -E 's/.*"(.+)"/\1/')
-    else
-        new_input_list=$(sox -V3 -n -t coreaudio dummy trim 0 1 2>&1 | grep 'Found Audio Device' | sed -E 's/.*"(.+)"/\1/')
-    fi
-    
-    if [ -z "$new_input_list" ]; then
-        debug_log "No audio devices found during switch attempt"
-        return 1
-    fi
-    
-    IFS=$'\n' read -rd '' -a available_devices <<<"$new_input_list"
-    
-    # Try to find next preferred device
-    local device_found=false
-    local start_index=$((current_device_index + 1))
-    
-    for ((i = start_index; i < ${#PREFERRED_DEVICES[@]}; i++)); do
-        for available in "${available_devices[@]}"; do
-            if [[ "$available" == "${PREFERRED_DEVICES[$i]}" ]]; then
-                INPUT_DEVICE="${PREFERRED_DEVICES[$i]}"
-                current_device_index=$i
-                device_found=true
-                debug_log "Switched to device: $INPUT_DEVICE"
-                if ! $HEADLESS && ! $JSON_OUTPUT && [[ "${SHAMON_BACKGROUND:-}" != "true" ]]; then
-                    echo -e "\n${YELLOW}Audio device switched to: $INPUT_DEVICE${NC}"
-                fi
-                return 0
-            fi
-        done
-    done
-    
-    # If no more preferred devices, try from beginning
-    if ! $device_found && $start_index -gt 0; then
-        for ((i = 0; i < start_index; i++)); do
-            for available in "${available_devices[@]}"; do
-                if [[ "$available" == "${PREFERRED_DEVICES[$i]}" ]]; then
-                    INPUT_DEVICE="${PREFERRED_DEVICES[$i]}"
-                    current_device_index=$i
-                    device_found=true
-                    debug_log "Switched to device (wrapped): $INPUT_DEVICE"
-                    if ! $HEADLESS && ! $JSON_OUTPUT && [[ "${SHAMON_BACKGROUND:-}" != "true" ]]; then
-                        echo -e "\n${YELLOW}Audio device switched to: $INPUT_DEVICE${NC}"
-                    fi
-                    return 0
-                fi
-            done
-        done
-    fi
-    
-    debug_log "No alternative preferred device found"
-    return 1
 }
 
 ###########################################
@@ -162,23 +146,53 @@ while [[ "$#" -gt 0 ]]; do
     --debug) DEBUG=true ;;
     --auto-input) AUTO_INPUT=true ;;
     --headless) HEADLESS=true ;;
+    --version)
+        show_version
+        exit 0
+        ;;
+    --help)
+        show_help
+        exit 0
+        ;;
     *)
         echo "Unknown parameter: $1"
+        echo "Use --help for usage information"
         exit 1
         ;;
     esac
     shift
 done
 
+# Set up exit trap
+trap cleanup INT TERM EXIT
+
+# Store original terminal settings for restoration
+if ! $HEADLESS; then
+    ORIGINAL_STTY=$(stty -g 2>/dev/null)
+fi
+
+# Check for required dependencies
+for cmd in sox vibra jq sqlite3 bc; do
+    if ! command -v $cmd &>/dev/null; then
+        if ! $HEADLESS; then
+            echo -e "${RED}Error: $cmd is not installed${NC}" >&2
+            echo "Install with: $(get_install_command $cmd)"
+        fi
+        exit 1
+    fi
+done
+
 # Get list of available audio input devices
 if $HEADLESS; then
-    input_list=$(sox -V3 -n -t coreaudio dummy trim 0 1 2>&1 | grep 'Found Audio Device' | sed -E 's/.*"(.+)"/\1/')
+    input_list=$(sox -V3 -n -t coreaudio dummy trim 0 1 2>&1 2>/dev/null | grep 'Found Audio Device' | sed -E 's/.*"(.+)"/\1/')
 else
     input_list=$(sox -V3 -n -t coreaudio dummy trim 0 1 2>&1 | grep 'Found Audio Device' | sed -E 's/.*"(.+)"/\1/')
 fi
+
 if [ -z "$input_list" ]; then
     if ! $HEADLESS; then
         echo -e "${RED}No input devices found.${NC}"
+        echo "Please check your audio device connections."
     fi
     exit 1
 fi
@@ -209,7 +223,7 @@ if $AUTO_INPUT; then
             for device in "${inputs[@]}"; do
                 echo "  - $device"
             done
-            echo -e "${RED}Preferred devices:${NC}"
+            echo -e "${RED}Preferred devices (configure in ~/.shamonrc):${NC}"
             for device in "${PREFERRED_DEVICES[@]}"; do
                 echo "  - $device"
             done
@@ -227,23 +241,19 @@ else
         printf "%2d) %s\n" $((i + 1)) "${inputs[$i]}"
     done
 
-    read -p "Enter the number of the input device to use: " device_number
-    INPUT_DEVICE="${inputs[$((device_number - 1))]}"
-    echo -e "${BLUE}Using input device: $INPUT_DEVICE${NC}"
-fi
+    while true; do
+        read -p "Enter the number of the input device to use (1-${#inputs[@]}): " device_number
 
-# Set up exit trap
-trap cleanup INT TERM
-
-# Check for required dependencies
-for cmd in sox vibra jq sqlite3 bc; do
-    if ! command -v $cmd &>/dev/null; then
-        if ! $HEADLESS; then
-            echo -e "${RED}Error: $cmd is not installed${NC}" >&2
+        # Validate input
+        if [[ "$device_number" =~ ^[0-9]+$ ]] && [ "$device_number" -ge 1 ] && [ "$device_number" -le "${#inputs[@]}" ]; then
+            INPUT_DEVICE="${inputs[$((device_number - 1))]}"
+            echo -e "${BLUE}Using input device: $INPUT_DEVICE${NC}"
+            break
+        else
+            echo -e "${RED}Invalid selection. Please enter a number between 1 and ${#inputs[@]}${NC}"
         fi
-        exit 1
-    fi
-done
+    done
+fi
 
 # Initialize SQLite database
 sqlite3 "$DB_FILE" "CREATE TABLE IF NOT EXISTS songs (
@@ -298,6 +308,7 @@ if $HEADLESS; then
             echo "Log file: $LOG_FILE"
             echo "To stop: kill $bg_pid"
             echo -e "${YELLOW}Note: Process will stop if you close this terminal${NC}"
+            echo -e "${YELLOW}Install 'screen' for better background support: $(get_install_command screen)${NC}"
         fi
 
         exit 0
@@ -310,9 +321,9 @@ fi
 # Non-headless mode setup
 if ! $HEADLESS; then
     # Enable read for Enter detection
-    stty -icanon -echo
+    stty -icanon -echo 2>/dev/null
     # Hide cursor for clean output
-    tput civis
+    tput civis 2>/dev/null
 fi
 
 # Start with a fresh log file every run (if not already done in headless mode)
@@ -332,7 +343,7 @@ fi
 # Initial console output
 if ! $JSON_OUTPUT && ! $HEADLESS; then
     clear
-    echo -e "${GREEN}📻 Music Monitor Started${NC} (Press Ctrl+C to stop)"
+    echo -e "${GREEN}📻 Music Monitor Started v$VERSION${NC} (Press Ctrl+C to stop)"
     echo "Recording ${DURATION}s samples every ${INTERVAL}s"
 fi
 
@@ -343,11 +354,9 @@ fi
 # Initialize variables
 last_song=""
 consecutive_empty=0
-max_retries=3
-first_run=true # Skip wait only on the very first run
-consecutive_zero_audio=0 # Track consecutive zero audio level readings
-max_zero_audio=3 # Switch device after this many consecutive zero readings
-current_device_index=-1 # Track which device we're using from preferred list
+first_run=true
+consecutive_zero_audio=0
+current_device_index=-1
 
 while true; do
     # Safety check to prevent rapid loops in headless mode
@@ -386,32 +395,53 @@ while true; do
     # Audio Level Detection
     ###########################################
 
-    TEMP_AUDIO="/tmp/audio_sample.wav"
-    sox -t coreaudio "$INPUT_DEVICE" -b $BITS -e signed-integer -r $RATE -c 1 "$TEMP_AUDIO" trim 0 0.5 2>/dev/null
+    # Record a short sample for level detection
+    sox -t coreaudio "$INPUT_DEVICE" -b $BITS -e signed-integer -r $RATE -c 1 "$TEMP_AUDIO" trim 0 $DURATION 2>/dev/null
 
-    # Analyse the recorded audio and extract the level before logging
+    # Check if recording was successful
+    if [ $? -ne 0 ] || [ ! -f "$TEMP_AUDIO" ]; then
+        debug_log "Failed to record audio from $INPUT_DEVICE"
+
+        # Attempt to switch device
+        if switch_audio_device; then
+            consecutive_zero_audio=0
+            continue
+        else
+            if ! $JSON_OUTPUT && ! $HEADLESS; then
+                clear_line
+                echo -e "${RED}Audio recording failed. Check device connection.${NC}"
+            fi
+            sleep 10
+            continue
+        fi
+    fi
+
+    # Analyze the recorded audio and extract the level
     audio_stat=$(sox -t wav "$TEMP_AUDIO" -n stat 2>&1)
     audio_level=$(echo "$audio_stat" | awk '/RMS[[:space:]]+amplitude/ {print $3}')
     audio_level=$(echo "$audio_level" | tr ',' '.')
 
-    if [ -z "$audio_level" ]; then
+    # Validate audio level
+    if [ -z "$audio_level" ] || ! [[ "$audio_level" =~ ^[0-9]*\.?[0-9]+([eE][-+]?[0-9]+)?$ ]]; then
         audio_level=0.0
-        debug_log "RMS amplitude not found, defaulting audio level to 0.0"
+        debug_log "RMS amplitude not found or invalid, defaulting audio level to 0.0"
     fi
 
-    if (($(echo "$audio_level < 0.01" | bc -l))); then
+    debug_log "Audio level: $audio_level (threshold: $AUDIO_THRESHOLD)"
+
+    # Check if audio level is too low
+    if (($(echo "$audio_level < $AUDIO_THRESHOLD" | bc -l))); then
         debug_log "Audio level too low ($audio_level), skipping recognition"
-        
+
         # Check if audio level is exactly zero (device might be disconnected)
         if (($(echo "$audio_level == 0" | bc -l))); then
             ((consecutive_zero_audio++))
             debug_log "Zero audio level detected (count: $consecutive_zero_audio)"
-            
+
             # Switch device if we've had too many consecutive zero readings
-            if ((consecutive_zero_audio >= max_zero_audio)); then
+            if ((consecutive_zero_audio >= MAX_CONSECUTIVE_ZERO_AUDIO)); then
                 if switch_audio_device; then
                     consecutive_zero_audio=0
-                    # Continue to next iteration with new device
                     continue
                 else
                     # No alternative device available, reset counter and continue
@@ -422,10 +452,10 @@ while true; do
             # Non-zero but still too low, reset zero counter
             consecutive_zero_audio=0
         fi
-        
+
         continue
     fi
-    
+
     # Audio level is good, reset zero counter
     consecutive_zero_audio=0
 
@@ -433,75 +463,87 @@ while true; do
     # Song Recognition
     ###########################################
 
-    # Record audio and perform recognition
+    # Perform recognition using the already recorded audio
     if [[ "${SHAMON_BACKGROUND:-}" == "true" ]]; then
         # In background mode, suppress vibra stderr
-        result=$(sox -t coreaudio "$INPUT_DEVICE" -t raw -b $BITS -e signed-integer -r $RATE -c 1 - trim 0 $DURATION 2>/dev/null |
+        result=$(sox -t wav "$TEMP_AUDIO" -t raw -b $BITS -e signed-integer -r $RATE -c 1 - 2>/dev/null |
             vibra --recognize --seconds $DURATION --rate $RATE --channels 1 --bits $BITS 2>/dev/null)
     else
         # In interactive mode, allow vibra stderr for debugging
-        result=$(sox -t coreaudio "$INPUT_DEVICE" -t raw -b $BITS -e signed-integer -r $RATE -c 1 - trim 0 $DURATION 2>/dev/null |
+        result=$(sox -t wav "$TEMP_AUDIO" -t raw -b $BITS -e signed-integer -r $RATE -c 1 - 2>/dev/null |
             vibra --recognize --seconds $DURATION --rate $RATE --channels 1 --bits $BITS)
     fi
 
-    # Validate JSON response
-    if echo "$result" | jq -e . >/dev/null 2>&1; then
-        # Check if track information exists
-        if echo "$result" | jq -e '.track' >/dev/null 2>&1; then
-
-            # Extract song information with trimmed title
-            raw_title=$(echo "$result" | jq -r '.track.title')
-            artist=$(echo "$result" | jq -r '.track.subtitle')
-            title=$(echo "$raw_title" | sed 's/ *(.*//')
-            song_info="$title by $artist"
-            timestamp=$(date '+%H:%M:%S')
-
-            # Only process if it's a different song from last detection
-            if [[ "$last_song" != "$song_info" ]]; then
-                INTERVAL=$BASE_INTERVAL
-                last_song="$song_info"
-
-                if $JSON_OUTPUT; then
-                    echo "$result" | jq -c --raw-output \
-                        "{timestamp: \"$timestamp\", title: .track.title, artist: .track.subtitle, audio_level: $audio_level}"
-                elif ! $HEADLESS && [[ "${SHAMON_BACKGROUND:-}" != "true" ]]; then
-                    clear_line
-                    echo -e "${GREEN}[$timestamp] $song_info${NC}"
-                else
-                    # In headless/background mode, log to debug log
-                    debug_log "[$timestamp] $song_info"
-                fi
-
-                title_escaped=$(echo "$title" | sed "s/'/''/g")
-                artist_escaped=$(echo "$artist" | sed "s/'/''/g")
-                sqlite3 "$DB_FILE" "INSERT INTO songs (timestamp, title, artist, audio_level)
-                    VALUES (datetime('now', 'localtime'), '$title_escaped', '$artist_escaped', $audio_level);"
-
-            else
-                INTERVAL=$((INTERVAL + 5))
-                if ((INTERVAL > 30)); then
-                    INTERVAL=30
-                fi
-            fi
-            consecutive_empty=0
-
-        else
-            ((consecutive_empty++))
-            INTERVAL=$((BASE_INTERVAL * consecutive_empty))
-            if ((INTERVAL > MAX_INTERVAL)); then
-                INTERVAL=$MAX_INTERVAL
-            fi
-        fi
-    else
+    # Validate and process JSON response
+    if ! echo "$result" | jq -e . >/dev/null 2>&1; then
+        debug_log "Invalid JSON response from Vibra"
         ((consecutive_empty++))
         INTERVAL=$((BASE_INTERVAL * consecutive_empty))
         if ((INTERVAL > MAX_INTERVAL)); then
             INTERVAL=$MAX_INTERVAL
         fi
+        continue
+    fi
+
+    # Check if track information exists
+    if echo "$result" | jq -e '.track' >/dev/null 2>&1; then
+        # Extract song information efficiently with a single jq call
+        read -r title artist < <(echo "$result" | jq -r '.track | "\(.title)\t\(.subtitle)"')
+
+        # Trim title (remove content in parentheses)
+        title=$(echo "$title" | sed 's/ *(.*//')
+
+        song_info="$title by $artist"
+        timestamp=$(date '+%H:%M:%S')
+
+        # Only process if it's a different song from last detection
+        if [[ "$last_song" != "$song_info" ]]; then
+            INTERVAL=$BASE_INTERVAL
+            last_song="$song_info"
+
+            if $JSON_OUTPUT; then
+                echo "$result" | jq -c --arg ts "$timestamp" --arg al "$audio_level" \
+                    '{timestamp: $ts, title: .track.title, artist: .track.subtitle, audio_level: ($al | tonumber)}'
+            elif ! $HEADLESS && [[ "${SHAMON_BACKGROUND:-}" != "true" ]]; then
+                clear_line
+                echo -e "${GREEN}[$timestamp] $song_info${NC}"
+            else
+                # In headless/background mode, log to debug log
+                debug_log "[$timestamp] $song_info"
+            fi
+
+            # Use safe SQL escaping function
+            title_escaped=$(sql_escape "$title")
+            artist_escaped=$(sql_escape "$artist")
+
+            # Insert into database with escaped values
+            sqlite3 "$DB_FILE" <<EOF
+INSERT INTO songs (timestamp, title, artist, audio_level)
+VALUES (datetime('now', 'localtime'), '$title_escaped', '$artist_escaped', $audio_level);
+EOF
+
+        else
+            # Same song detected, increase interval gradually
+            INTERVAL=$((INTERVAL + INTERVAL_INCREMENT))
+            if ((INTERVAL > SAME_SONG_MAX_INTERVAL)); then
+                INTERVAL=$SAME_SONG_MAX_INTERVAL
+            fi
+            debug_log "Same song detected, interval increased to $INTERVAL"
+        fi
+        consecutive_empty=0
+
+    else
+        # No track found
+        ((consecutive_empty++))
+        INTERVAL=$((BASE_INTERVAL * consecutive_empty))
+        if ((INTERVAL > MAX_INTERVAL)); then
+            INTERVAL=$MAX_INTERVAL
+        fi
+        debug_log "No track found in response (attempt $consecutive_empty)"
     fi
 
     # Show "No music detected" after several empty results
-    if ((consecutive_empty >= max_retries)) && ! $JSON_OUTPUT && ! $HEADLESS && [[ "${SHAMON_BACKGROUND:-}" != "true" ]]; then
+    if ((consecutive_empty >= MAX_RECOGNITION_RETRIES)) && ! $JSON_OUTPUT && ! $HEADLESS && [[ "${SHAMON_BACKGROUND:-}" != "true" ]]; then
         clear_line
         echo -ne "${GRAY}No music detected${NC}"
         consecutive_empty=0
@@ -520,11 +562,13 @@ done
 
 ###########################################
 # Usage:
-# ./script.sh              # Normal mode with debug info
-# ./script.sh --json       # JSON output mode
-# ./script.sh --debug      # Debug mode
-# ./script.sh --auto-input # Auto-select input device from preferred list
-# ./script.sh --headless   # Run in background without console output
+# ./shamon.sh              # Normal mode with debug info
+# ./shamon.sh --json       # JSON output mode
+# ./shamon.sh --debug      # Debug mode
+# ./shamon.sh --auto-input # Auto-select input device from preferred list
+# ./shamon.sh --headless   # Run in background without console output
+# ./shamon.sh --version    # Show version information
+# ./shamon.sh --help       # Show help message
 #
 # Query history:
 # sqlite3 ~/.music_monitor.db "SELECT datetime(timestamp, 'localtime'),
