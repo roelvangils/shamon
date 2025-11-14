@@ -18,7 +18,7 @@
 # - Automatic device switching
 ###########################################
 
-VERSION="1.1.0"
+VERSION="1.2.0"
 
 # Source common functions library
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -496,10 +496,18 @@ while true; do
         song_info="$title by $artist"
         timestamp=$(date '+%H:%M:%S')
 
+        # Create fuzzy match key using first word of title and artist
+        # This handles variations like "Fastlove, Pt. 1" vs "Fastlove (Promo Edit)"
+        # or "George Michael" vs "George Michael feat. Someone"
+        title_first_word=$(echo "$title" | awk '{print $1}' | tr -d ',' | tr '[:upper:]' '[:lower:]')
+        artist_first_word=$(echo "$artist" | awk '{print $1}' | tr -d ',' | tr '[:upper:]' '[:lower:]')
+        match_key="${title_first_word}|${artist_first_word}"
+
         # Only process if it's a different song from last detection
-        if [[ "$last_song" != "$song_info" ]]; then
+        if [[ "$last_song" != "$match_key" ]]; then
             INTERVAL=$BASE_INTERVAL
-            last_song="$song_info"
+            last_song="$match_key"
+            debug_log "New song detected (match key: $match_key) - $song_info"
 
             if $JSON_OUTPUT; then
                 echo "$result" | jq -c --arg ts "$timestamp" --arg al "$audio_level" \
@@ -523,12 +531,12 @@ VALUES (datetime('now', 'localtime'), '$title_escaped', '$artist_escaped', $audi
 EOF
 
         else
-            # Same song detected, increase interval gradually
+            # Same song detected (fuzzy match), increase interval gradually
             INTERVAL=$((INTERVAL + INTERVAL_INCREMENT))
             if ((INTERVAL > SAME_SONG_MAX_INTERVAL)); then
                 INTERVAL=$SAME_SONG_MAX_INTERVAL
             fi
-            debug_log "Same song detected, interval increased to $INTERVAL"
+            debug_log "Same song detected (fuzzy match: $match_key), interval increased to $INTERVAL"
         fi
         consecutive_empty=0
 

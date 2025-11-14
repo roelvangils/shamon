@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Shamon v1.1.0 is a CLI tool that continuously monitors and identifies music playing on your computer using Vibra for audio fingerprinting and the Shazam API. It records audio samples, processes them for recognition, and stores results in a local SQLite database.
+Shamon v1.2.0 is a CLI tool that continuously monitors and identifies music playing on your computer using Vibra for audio fingerprinting and the Shazam API. It records audio samples, processes them for recognition, and stores results in a local SQLite database.
 
 ## Commands
 
@@ -95,6 +95,7 @@ Audio Device → SoX Recording → Audio Level Check → Vibra Recognition → S
 - Version information (--version flag)
 - Help system (--help flag)
 - Optimized audio recording (single recording used for both level check and recognition)
+- Fuzzy song matching (compares first word of title and artist to handle variations like "Fastlove, Pt. 1" vs "Fastlove (Promo Edit)")
 
 ## Code Style Guidelines
 
@@ -195,6 +196,41 @@ Audio Device → SoX Recording → Audio Level Check → Vibra Recognition → S
 - `README.md` - User documentation with installation and troubleshooting
 - `CLAUDE.md` - This file, developer documentation
 
+## Song Matching Algorithm
+
+### Fuzzy Matching Logic
+
+Shamon uses fuzzy matching to detect when the same song is recognized multiple times, even when Shazam returns variations of the title or artist:
+
+**Problem:** Shazam often returns variations like:
+- "Fastlove, Pt. 1" vs "Fastlove (Promo Edit)"
+- "George Michael" vs "George Michael feat. Someone"
+
+**Solution:** Compare only the first word of both title and artist (case-insensitive):
+```bash
+# Extract first words and normalize
+title_first_word=$(echo "$title" | awk '{print $1}' | tr -d ',' | tr '[:upper:]' '[:lower:]')
+artist_first_word=$(echo "$artist" | awk '{print $1}' | tr -d ',' | tr '[:upper:]' '[:lower:]')
+match_key="${title_first_word}|${artist_first_word}"
+
+# Compare match_key instead of full song_info
+if [[ "$last_song" != "$match_key" ]]; then
+    # New song - save to database and display
+else
+    # Same song - increase interval to reduce API calls
+fi
+```
+
+**Benefits:**
+- Prevents duplicate database entries for the same song
+- Reduces API calls by increasing check interval for repeated songs
+- Still saves full title and artist details to database for accuracy
+
+**Edge cases handled:**
+- Commas removed (handles "Fastlove," vs "Fastlove")
+- Case-insensitive (handles "george" vs "George")
+- Punctuation variations (handles "(Promo Edit)" vs "Pt. 1")
+
 ## Recent Changes (v1.1.0)
 
 ### Security Improvements
@@ -217,6 +253,7 @@ Audio Device → SoX Recording → Audio Level Check → Vibra Recognition → S
 - Combined multiple jq calls into single efficient invocations
 - Better error handling with installation suggestions
 - Improved web server with stats endpoint
+- Implemented fuzzy song matching (first word comparison) to handle Shazam variations
 
 ### Documentation
 - Comprehensive troubleshooting section in README
@@ -226,5 +263,6 @@ Audio Device → SoX Recording → Audio Level Check → Vibra Recognition → S
 
 ## Version History
 
-- **v1.1.0** (Current) - Major refactoring with security fixes and new features
+- **v1.2.0** (Current) - Fuzzy song matching to handle Shazam variations
+- **v1.1.0** - Major refactoring with security fixes and new features
 - **v1.0.0** - Initial release with basic monitoring functionality

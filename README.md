@@ -398,7 +398,10 @@ Audio Device → SoX Recording → Audio Level Check → Vibra Recognition → S
 
 ## Version
 
-Current version: **1.1.0**
+Current version: **1.2.0**
+
+### What's New in v1.2.0
+- **Fuzzy song matching** - Shamon now intelligently handles Shazam variations by comparing only the first word of the title and artist. This prevents duplicate entries for songs like "Fastlove, Pt. 1" vs "Fastlove (Promo Edit)" by the same artist.
 
 ## Contributing
 
