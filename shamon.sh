@@ -18,7 +18,7 @@
 # - Automatic device switching
 ###########################################
 
-VERSION="1.2.0"
+VERSION="1.2.1"
 
 # Source common functions library
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -488,7 +488,8 @@ while true; do
     # Check if track information exists
     if echo "$result" | jq -e '.track' >/dev/null 2>&1; then
         # Extract song information efficiently with a single jq call
-        read -r title artist < <(echo "$result" | jq -r '.track | "\(.title)\t\(.subtitle)"')
+        # Use IFS=$'\t' to split only on tab, not spaces (handles multi-word titles like "Ray of Light")
+        IFS=$'\t' read -r title artist < <(echo "$result" | jq -r '.track | "\(.title)\t\(.subtitle)"')
 
         # Trim title (remove content in parentheses)
         title=$(echo "$title" | sed 's/ *(.*//')

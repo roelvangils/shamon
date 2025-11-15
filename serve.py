@@ -14,7 +14,7 @@ import uvicorn
 app = FastAPI(
     title="Shamon Music Data API",
     description="Web API for viewing music recognition history",
-    version="1.2.0"
+    version="1.2.1"
 )
 
 # Database configuration
@@ -69,7 +69,7 @@ def root():
     """Root endpoint with API information"""
     return {
         "name": "Shamon Music Data API",
-        "version": "1.2.0",
+        "version": "1.2.1",
         "endpoints": {
             "/json": "Get song data as JSON",
             "/table": "Get song data as HTML table",
@@ -276,7 +276,7 @@ def get_music_table(limit: int = 100):
 
     html += """
         <div class="footer">
-            Shamon v1.2.0 | Showing last """ + str(len(data)) + """ detections
+            Shamon v1.2.1 | Showing last """ + str(len(data)) + """ detections
         </div>
     </body>
     </html>
