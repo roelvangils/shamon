@@ -10,11 +10,12 @@ from typing import List, Dict, Any
 import sqlite3
 import os
 import uvicorn
+import html as html_module
 
 app = FastAPI(
     title="Shamon Music Data API",
     description="Web API for viewing music recognition history",
-    version="1.2.1"
+    version="1.2.2"
 )
 
 # Database configuration
@@ -69,7 +70,7 @@ def root():
     """Root endpoint with API information"""
     return {
         "name": "Shamon Music Data API",
-        "version": "1.2.1",
+        "version": "1.2.2",
         "endpoints": {
             "/json": "Get song data as JSON",
             "/table": "Get song data as HTML table",
@@ -159,7 +160,7 @@ def get_music_table(limit: int = 100):
         data = query_songs(limit)
     except Exception as e:
         return Response(
-            content=f"<html><body><h1>Error</h1><p>{str(e)}</p></body></html>",
+            content=f"<html><body><h1>Error</h1><p>{html_module.escape(str(e))}</p></body></html>",
             media_type="text/html"
         )
 
@@ -250,11 +251,11 @@ def get_music_table(limit: int = 100):
             </tr>
         """
 
-        # Add table rows
+        # Add table rows (escape HTML to prevent XSS)
         for item in data:
-            timestamp = item.get("timestamp", "")
-            title = item.get("title", "")
-            artist = item.get("artist", "")
+            timestamp = html_module.escape(str(item.get("timestamp", "")))
+            title = html_module.escape(str(item.get("title", "")))
+            artist = html_module.escape(str(item.get("artist", "")))
             audio_level = item.get("audio_level", "")
 
             html += f"""
@@ -276,7 +277,7 @@ def get_music_table(limit: int = 100):
 
     html += """
         <div class="footer">
-            Shamon v1.2.1 | Showing last """ + str(len(data)) + """ detections
+            Shamon v1.2.2 | Showing last """ + str(len(data)) + """ detections
         </div>
     </body>
     </html>

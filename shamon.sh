@@ -18,7 +18,7 @@
 # - Automatic device switching
 ###########################################
 
-VERSION="1.2.1"
+VERSION="1.2.2"
 
 # Source common functions library
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

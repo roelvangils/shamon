@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Shamon v1.2.0 is a CLI tool that continuously monitors and identifies music playing on your computer using Vibra for audio fingerprinting and the Shazam API. It records audio samples, processes them for recognition, and stores results in a local SQLite database.
+Shamon v1.2.2 is a CLI tool that continuously monitors and identifies music playing on your computer using Vibra for audio fingerprinting and the Shazam API. It records audio samples, processes them for recognition, and stores results in a local SQLite database.
 
 ## Commands
 
@@ -263,6 +263,8 @@ fi
 
 ## Version History
 
-- **v1.2.0** (Current) - Fuzzy song matching to handle Shazam variations
+- **v1.2.2** (Current) - Network check caching, device fallback improvements, XSS fix
+- **v1.2.1** - Fix parsing of multi-word song titles
+- **v1.2.0** - Fuzzy song matching to handle Shazam variations
 - **v1.1.0** - Major refactoring with security fixes and new features
 - **v1.0.0** - Initial release with basic monitoring functionality

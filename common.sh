@@ -15,6 +15,10 @@ RED='\033[0;31m'
 YELLOW='\033[0;33m'
 NC='\033[0m' # No Color
 
+# Network check caching (reduces DNS queries)
+LAST_NETWORK_CHECK=0
+NETWORK_CACHE_DURATION=30
+
 ###########################################
 # Debug logging function
 # Prints debug messages with timestamp if DEBUG is enabled
@@ -37,17 +41,29 @@ clear_line() {
 
 ###########################################
 # Network connectivity check
+# Uses caching to reduce unnecessary ping requests
 # Returns: 0 if network is available, 1 otherwise
 ###########################################
 check_network() {
-    if ! ping -c 1 8.8.8.8 >/dev/null 2>&1; then
+    local now
+    now=$(date +%s)
+
+    # Use cached result if within cache duration
+    if ((now - LAST_NETWORK_CHECK < NETWORK_CACHE_DURATION)); then
+        return 0
+    fi
+
+    if ! ping -c 1 -W 2 8.8.8.8 >/dev/null 2>&1; then
         if ! $JSON_OUTPUT && ! $HEADLESS; then
             clear_line
             echo -ne "${RED}Network unavailable, waiting...${NC}"
         fi
         debug_log "Network unavailable"
+        LAST_NETWORK_CHECK=0  # Reset cache on failure
         return 1
     fi
+
+    LAST_NETWORK_CHECK=$now
     return 0
 }
 
@@ -111,7 +127,22 @@ switch_audio_device() {
         done
     fi
 
-    debug_log "No alternative preferred device found"
+    # Last resort: try first available device that isn't the current one
+    if ! $device_found; then
+        for available in "${available_devices[@]}"; do
+            if [[ "$available" != "$INPUT_DEVICE" ]]; then
+                INPUT_DEVICE="$available"
+                current_device_index=-1  # Reset index since not a preferred device
+                debug_log "Falling back to available device: $INPUT_DEVICE"
+                if ! $HEADLESS && ! $JSON_OUTPUT && [[ "${SHAMON_BACKGROUND:-}" != "true" ]]; then
+                    echo -e "\n${YELLOW}Audio device switched to: $INPUT_DEVICE${NC}"
+                fi
+                return 0
+            fi
+        done
+    fi
+
+    debug_log "No alternative device found"
     return 1
 }
 
