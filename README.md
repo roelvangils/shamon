@@ -1,14 +1,44 @@
 # Shamon - Music Recognition Monitor
 
-A CLI tool that continuously monitors and identifies music playing on your computer using Vibra for audio fingerprinting and the Shazam API. It records audio samples, processes them for recognition, and stores results in a local SQLite database.
+A lightweight CLI tool that continuously monitors and identifies music playing on your computer using Vibra for audio fingerprinting and the Shazam API. Shamon is smarter than running Shazam manually — it normalizes audio for better recognition, intelligently avoids duplicate detections, minimizes API calls, and automatically handles device failures.
+
+## Why Shamon?
+
+| Feature | Shazam App | Shamon |
+|---------|------------|--------|
+| Recognizes quiet audio | ❌ | ✅ Audio normalized to -3dB before recognition |
+| Avoids duplicate entries | ❌ | ✅ Intelligent title matching with time window |
+| Runs continuously | ❌ | ✅ Background monitoring with auto-recovery |
+| Handles device failures | ❌ | ✅ Automatic fallback to next available mic |
+| Minimal API usage | ❌ | ✅ Skips silence, increases interval for same song |
+| Local history | ❌ | ✅ SQLite database with web interface |
 
 ## Features
 
-- 🎵 Continuous audio monitoring with automatic device switching
+### Intelligent Audio Processing
+- **Audio normalization** — Boosts quiet recordings to -3dB before sending to Shazam, recognizing music that would otherwise be missed
+- **Smart silence detection** — Skips API calls when no audio is detected (threshold: 0.001 RMS)
+- **Single recording, dual use** — Same audio sample used for level detection and recognition (no wasted recordings)
+
+### Smart Song Matching
+- **Title-based matching** — Compares first 3 words of song titles (case-insensitive)
+- **Time window deduplication** — Same song within 60 seconds is considered a repeat
+- **Handles artist variations** — "You Got The Love" by "Candi Staton" and "The Source & Candi Staton" are correctly matched
+
+### Minimal API Footprint
+- **Adaptive intervals** — Increases wait time when the same song keeps playing
+- **Network check caching** — Caches connectivity status for 30 seconds
+- **Skip on silence** — No API calls when audio level is below threshold
+
+### Reliable Device Handling
+- **Automatic device switching** — Switches to next device after 3 consecutive zero-audio readings
+- **Mic-first fallback** — Prioritizes devices with "mic" in the name when searching for alternatives
+- **Preferred device list** — Configure your preferred devices in order of priority
+
+### Additional Features
 - 📊 SQLite database storage for recognition history
-- 🌐 Web server with JSON API and HTML interface
-- 🎨 Colored terminal output for better UX
-- 🔄 Automatic failover between audio devices
+- 🌐 Web server with JSON API and cyberpunk-styled HTML interface
+- 🎨 Colored terminal output with real-time status
 - ⚙️ Configurable via `~/.shamonrc` file
 - 🐛 Debug mode with detailed logging
 - 📱 JSON output mode for integration with other tools
@@ -82,8 +112,8 @@ PREFERRED_DEVICES=(
     "Built-in Microphone"
 )
 
-# Audio detection threshold (lower = more sensitive)
-AUDIO_THRESHOLD=0.005
+# Audio detection threshold (default: 0.001, very sensitive due to normalization)
+AUDIO_THRESHOLD=0.001
 
 # Base interval between checks (in seconds)
 BASE_INTERVAL=15
@@ -368,18 +398,22 @@ python serve.py
 
 ### Core Components
 
-1. **Audio Capture**: Uses SoX to record 5-second samples from selected audio device
-2. **Level Detection**: Calculates RMS amplitude to skip silence (configurable threshold)
-3. **Recognition**: Sends audio to Vibra, which uses Shazam API for identification
-4. **Storage**: SQLite database stores timestamp, title, artist, and audio_level
-5. **Interval Management**: Dynamically adjusts check frequency (increases when same song detected)
+1. **Audio Capture** — Uses SoX to record 5-second samples from selected audio device
+2. **Level Detection** — Calculates RMS amplitude to skip silence (threshold: 0.001)
+3. **Normalization** — Boosts audio to -3dB for consistent recognition quality
+4. **Recognition** — Sends normalized audio to Vibra → Shazam API
+5. **Deduplication** — Title-based matching with 60-second time window
+6. **Storage** — SQLite database stores timestamp, title, artist, and audio_level
+7. **Interval Management** — Dynamically adjusts check frequency based on results
 
 ### Data Flow
 
 ```
-Audio Device → SoX Recording → Audio Level Check → Vibra Recognition → SQLite Storage
-                                     ↓                                        ↓
-                              (Skip if silent)                    Console/JSON Output
+Audio Device → SoX Recording → Level Check → Normalize (-3dB) → Vibra/Shazam → SQLite
+                                    ↓                                              ↓
+                             (Skip if silent)                          Title Matching
+                                                                              ↓
+                                                                 (Skip if duplicate)
 ```
 
 ## Files
@@ -398,10 +432,31 @@ Audio Device → SoX Recording → Audio Level Check → Vibra Recognition → S
 
 ## Version
 
-Current version: **1.2.0**
+Current version: **1.2.3**
 
-### What's New in v1.2.0
-- **Fuzzy song matching** - Shamon now intelligently handles Shazam variations by comparing only the first word of the title and artist. This prevents duplicate entries for songs like "Fastlove, Pt. 1" vs "Fastlove (Promo Edit)" by the same artist.
+### What's New
+
+**v1.2.3** — Improved song matching and audio detection
+- Audio normalization to -3dB before recognition (detects quieter music)
+- Title-based matching with 60-second time window (handles artist variations)
+- Lower detection threshold (0.001 RMS)
+- Mic-first device fallback priority
+
+**v1.2.2** — Performance and reliability
+- Network check caching (30 seconds)
+- Improved device fallback to any available device
+- XSS fix in web server
+
+**v1.2.1** — Bug fix
+- Fixed parsing of multi-word song titles
+
+**v1.2.0** — Fuzzy matching
+- First-word matching for title and artist
+
+**v1.1.0** — Major refactoring
+- Security fixes (SQL injection prevention)
+- Configuration file support
+- Optimized audio recording
 
 ## Contributing
 
