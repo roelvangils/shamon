@@ -127,9 +127,21 @@ switch_audio_device() {
         done
     fi
 
-    # Last resort: try first available device that isn't the current one
+    # Last resort: try available devices, prioritizing those with "mic" in the name
     if ! $device_found; then
+        # Sort devices: those containing "mic" (case-insensitive) come first
+        local mic_devices=()
+        local other_devices=()
         for available in "${available_devices[@]}"; do
+            if [[ "${available,,}" == *mic* ]]; then
+                mic_devices+=("$available")
+            else
+                other_devices+=("$available")
+            fi
+        done
+        local sorted_devices=("${mic_devices[@]}" "${other_devices[@]}")
+
+        for available in "${sorted_devices[@]}"; do
             if [[ "$available" != "$INPUT_DEVICE" ]]; then
                 INPUT_DEVICE="$available"
                 current_device_index=-1  # Reset index since not a preferred device

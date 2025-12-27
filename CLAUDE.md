@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Shamon v1.2.2 is a CLI tool that continuously monitors and identifies music playing on your computer using Vibra for audio fingerprinting and the Shazam API. It records audio samples, processes them for recognition, and stores results in a local SQLite database.
+Shamon v1.2.3 is a CLI tool that continuously monitors and identifies music playing on your computer using Vibra for audio fingerprinting and the Shazam API. It records audio samples, processes them for recognition, and stores results in a local SQLite database.
 
 ## Commands
 
@@ -198,38 +198,41 @@ Audio Device → SoX Recording → Audio Level Check → Vibra Recognition → S
 
 ## Song Matching Algorithm
 
-### Fuzzy Matching Logic
+### Title-based Matching with Time Window
 
-Shamon uses fuzzy matching to detect when the same song is recognized multiple times, even when Shazam returns variations of the title or artist:
+Shamon uses title-based matching with a time window to detect when the same song is recognized multiple times, even when Shazam returns different artist credits:
 
 **Problem:** Shazam often returns variations like:
+- "You Got The Love" by "Candi Staton" vs "You Got the Love" by "The Source & Candi Staton"
 - "Fastlove, Pt. 1" vs "Fastlove (Promo Edit)"
-- "George Michael" vs "George Michael feat. Someone"
 
-**Solution:** Compare only the first word of both title and artist (case-insensitive):
+**Solution:** Compare first 3 words of title (normalized) with a 60-second time window:
 ```bash
-# Extract first words and normalize
-title_first_word=$(echo "$title" | awk '{print $1}' | tr -d ',' | tr '[:upper:]' '[:lower:]')
-artist_first_word=$(echo "$artist" | awk '{print $1}' | tr -d ',' | tr '[:upper:]' '[:lower:]')
-match_key="${title_first_word}|${artist_first_word}"
+# Normalize title: first 3 words, lowercase, remove punctuation
+title_normalized=$(echo "$title" | awk '{print $1, $2, $3}' | tr '[:upper:]' '[:lower:]' | tr -d ',')
+current_time=$(date +%s)
 
-# Compare match_key instead of full song_info
-if [[ "$last_song" != "$match_key" ]]; then
+# Consider same song if title matches AND within 60 seconds
+if [[ "$last_song" != "$title_normalized" ]] || ((current_time - last_detection_time > 60)); then
     # New song - save to database and display
+    last_song="$title_normalized"
+    last_detection_time=$current_time
 else
     # Same song - increase interval to reduce API calls
 fi
 ```
 
 **Benefits:**
+- Handles artist credit variations (same song, different artist attributions)
 - Prevents duplicate database entries for the same song
 - Reduces API calls by increasing check interval for repeated songs
 - Still saves full title and artist details to database for accuracy
+- Time window allows same song to be logged again after 60 seconds (e.g., if replayed)
 
 **Edge cases handled:**
-- Commas removed (handles "Fastlove," vs "Fastlove")
-- Case-insensitive (handles "george" vs "George")
-- Punctuation variations (handles "(Promo Edit)" vs "Pt. 1")
+- Case variations ("The" vs "the")
+- Different artist credits for same song
+- Punctuation variations
 
 ## Recent Changes (v1.1.0)
 
@@ -263,7 +266,8 @@ fi
 
 ## Version History
 
-- **v1.2.2** (Current) - Network check caching, device fallback improvements, XSS fix
+- **v1.2.3** (Current) - Improved song matching (title + time window), mic-first device fallback
+- **v1.2.2** - Network check caching, device fallback improvements, XSS fix
 - **v1.2.1** - Fix parsing of multi-word song titles
 - **v1.2.0** - Fuzzy song matching to handle Shazam variations
 - **v1.1.0** - Major refactoring with security fixes and new features

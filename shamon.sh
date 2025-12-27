@@ -18,7 +18,7 @@
 # - Automatic device switching
 ###########################################
 
-VERSION="1.2.2"
+VERSION="1.2.3"
 
 # Source common functions library
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -39,13 +39,14 @@ RATE=22050                           # Audio sample rate
 BITS=16                              # Audio bit depth
 DB_FILE="$HOME/.music_monitor.db"    # SQLite database location
 LOG_FILE="$HOME/.music_monitor.log"  # Log file for debug output
-AUDIO_THRESHOLD=0.01                 # Minimum RMS level to trigger recognition
+AUDIO_THRESHOLD=0.001                # Minimum RMS level to trigger recognition (low because we normalize)
 DEBUG=false                          # Enable debug output
 INPUT_DEVICE=""                      # Selected audio device
 JSON_OUTPUT=false                    # JSON output format
 AUTO_INPUT=false                     # Auto-select input device
 HEADLESS=false                       # Run in background
 TEMP_AUDIO="/tmp/shamon_audio_$$.wav" # Temporary audio file
+TEMP_NORMALIZED="/tmp/shamon_normalized_$$.wav" # Normalized audio file
 
 # Preferred audio input devices (in order of preference)
 PREFERRED_DEVICES=(
@@ -117,7 +118,7 @@ cleanup() {
     debug_log "Cleanup initiated"
 
     # Clean up temporary files
-    rm -f "$TEMP_AUDIO"
+    rm -f "$TEMP_AUDIO" "$TEMP_NORMALIZED"
 
     # Restore terminal state
     if ! $HEADLESS && [ -n "$ORIGINAL_STTY" ]; then
@@ -353,6 +354,7 @@ fi
 
 # Initialize variables
 last_song=""
+last_detection_time=0
 consecutive_empty=0
 first_run=true
 consecutive_zero_audio=0
@@ -463,14 +465,18 @@ while true; do
     # Song Recognition
     ###########################################
 
-    # Perform recognition using the already recorded audio
+    # Normalize audio to -3dB for better recognition of quiet recordings
+    sox "$TEMP_AUDIO" "$TEMP_NORMALIZED" norm -3 2>/dev/null
+    debug_log "Audio normalized (original RMS: $audio_level)"
+
+    # Perform recognition using the normalized audio
     if [[ "${SHAMON_BACKGROUND:-}" == "true" ]]; then
         # In background mode, suppress vibra stderr
-        result=$(sox -t wav "$TEMP_AUDIO" -t raw -b $BITS -e signed-integer -r $RATE -c 1 - 2>/dev/null |
+        result=$(sox -t wav "$TEMP_NORMALIZED" -t raw -b $BITS -e signed-integer -r $RATE -c 1 - 2>/dev/null |
             vibra --recognize --seconds $DURATION --rate $RATE --channels 1 --bits $BITS 2>/dev/null)
     else
         # In interactive mode, allow vibra stderr for debugging
-        result=$(sox -t wav "$TEMP_AUDIO" -t raw -b $BITS -e signed-integer -r $RATE -c 1 - 2>/dev/null |
+        result=$(sox -t wav "$TEMP_NORMALIZED" -t raw -b $BITS -e signed-integer -r $RATE -c 1 - 2>/dev/null |
             vibra --recognize --seconds $DURATION --rate $RATE --channels 1 --bits $BITS)
     fi
 
@@ -497,18 +503,18 @@ while true; do
         song_info="$title by $artist"
         timestamp=$(date '+%H:%M:%S')
 
-        # Create fuzzy match key using first word of title and artist
-        # This handles variations like "Fastlove, Pt. 1" vs "Fastlove (Promo Edit)"
-        # or "George Michael" vs "George Michael feat. Someone"
-        title_first_word=$(echo "$title" | awk '{print $1}' | tr -d ',' | tr '[:upper:]' '[:lower:]')
-        artist_first_word=$(echo "$artist" | awk '{print $1}' | tr -d ',' | tr '[:upper:]' '[:lower:]')
-        match_key="${title_first_word}|${artist_first_word}"
+        # Normalize title: first 3 words, lowercase, remove punctuation
+        # This handles variations like "You Got The Love" vs "You Got the Love"
+        title_normalized=$(echo "$title" | awk '{print $1, $2, $3}' | tr '[:upper:]' '[:lower:]' | tr -d ',')
+        current_time=$(date +%s)
 
-        # Only process if it's a different song from last detection
-        if [[ "$last_song" != "$match_key" ]]; then
+        # Consider same song if title matches AND within 60 seconds
+        # This handles cases where Shazam returns different artist credits for the same song
+        if [[ "$last_song" != "$title_normalized" ]] || ((current_time - last_detection_time > 60)); then
             INTERVAL=$BASE_INTERVAL
-            last_song="$match_key"
-            debug_log "New song detected (match key: $match_key) - $song_info"
+            last_song="$title_normalized"
+            last_detection_time=$current_time
+            debug_log "New song detected (title: $title_normalized) - $song_info"
 
             if $JSON_OUTPUT; then
                 echo "$result" | jq -c --arg ts "$timestamp" --arg al "$audio_level" \
@@ -537,7 +543,7 @@ EOF
             if ((INTERVAL > SAME_SONG_MAX_INTERVAL)); then
                 INTERVAL=$SAME_SONG_MAX_INTERVAL
             fi
-            debug_log "Same song detected (fuzzy match: $match_key), interval increased to $INTERVAL"
+            debug_log "Same song detected (title: $title_normalized), interval increased to $INTERVAL"
         fi
         consecutive_empty=0
 
