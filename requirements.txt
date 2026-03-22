@@ -1,6 +1,6 @@
-# Python dependencies for Shamon web server (serve.py)
+# Python dependencies for Shamon
 # Install with: pip install -r requirements.txt
 
-# Using flexible version constraints to avoid conflicts with other packages
+# Web server (serve.py)
 fastapi>=0.115.0
 uvicorn[standard]>=0.30.0

@@ -1,2 +1,5 @@
 debug_sample.wav
 .DS_Store
+nohup.out
+__pycache__/
+*.pyc

@@ -24,7 +24,8 @@
     <!-- REQUIRED: Update this path to your shamon installation directory -->
     <key>ProgramArguments</key>
     <array>
-        <string>/PATH/TO/shamon/shamon.sh</string>
+        <string>/usr/bin/python3</string>
+        <string>/PATH/TO/shamon/shamon.py</string>
         <string>--auto-input</string>
     </array>
 

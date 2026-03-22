@@ -15,7 +15,7 @@ import html as html_module
 app = FastAPI(
     title="Shamon Music Data API",
     description="Web API for viewing music recognition history",
-    version="1.2.3"
+    version="2.0.0"
 )
 
 # Database configuration
@@ -27,7 +27,7 @@ def get_db_connection():
     if not os.path.exists(DB_PATH):
         raise HTTPException(
             status_code=503,
-            detail=f"Database not found at {DB_PATH}. Run shamon.sh first to create the database."
+            detail=f"Database not found at {DB_PATH}. Run shamon.py first to create the database."
         )
     return sqlite3.connect(DB_PATH)
 
@@ -70,7 +70,7 @@ def root():
     """Root endpoint with API information"""
     return {
         "name": "Shamon Music Data API",
-        "version": "1.2.3",
+        "version": "2.0.0",
         "endpoints": {
             "/json": "Get song data as JSON",
             "/table": "Get song data as HTML table",
@@ -271,13 +271,13 @@ def get_music_table(limit: int = 100):
     else:
         html += """
         <div class="no-data">
-            <p>No music data found. Run shamon.sh to start monitoring.</p>
+            <p>No music data found. Run shamon.py to start monitoring.</p>
         </div>
         """
 
     html += """
         <div class="footer">
-            Shamon v1.2.3 | Showing last """ + str(len(data)) + """ detections
+            Shamon v2.0.0 | Showing last """ + str(len(data)) + """ detections
         </div>
     </body>
     </html>
