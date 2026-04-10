@@ -604,8 +604,17 @@ class ShamonMonitor:
                 time.sleep(30)
                 continue
 
-            # Record audio
-            if not self.record_audio():
+            # Record audio (retry up to 3 times before switching device)
+            record_success = False
+            for attempt in range(self.config.max_recognition_retries):
+                if self.record_audio():
+                    record_success = True
+                    break
+                self.debug_log(f"Recording failed (attempt {attempt + 1}/{self.config.max_recognition_retries})")
+                if attempt < self.config.max_recognition_retries - 1:
+                    time.sleep(2)
+
+            if not record_success:
                 if self.switch_audio_device():
                     self.consecutive_zero_audio = 0
                     continue
